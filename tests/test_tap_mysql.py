@@ -1,10 +1,12 @@
 import unittest
+from unittest.mock import patch
 
+import pymysql
 import singer
 import singer.metadata
 
 import tap_mysql
-from tap_mysql.connection import connect_with_backoff
+from tap_mysql.connection import connect_with_backoff, MySQLConnection
 
 try:
     import tests.utils as test_utils
@@ -15,8 +17,6 @@ import tap_mysql.sync_strategies.binlog as binlog
 import tap_mysql.sync_strategies.common as common
 
 from singer.schema import Schema
-
-LOGGER = singer.get_logger()
 
 SINGER_MESSAGES = []
 
@@ -566,8 +566,6 @@ class TestIncrementalReplication(unittest.TestCase):
 
         tap_mysql.do_sync(self.conn, {}, self.catalog, state)
 
-        print(state)
-
         self.assertEqual(state['bookmarks']['tap_mysql_test-incremental']['replication_key'], 'val')
         self.assertEqual(state['bookmarks']['tap_mysql_test-incremental']['replication_key_value'], 3)
         self.assertEqual(state['bookmarks']['tap_mysql_test-incremental']['version'], 1)
@@ -706,15 +704,10 @@ class TestBinlogReplication(unittest.TestCase):
         expected_exception_message = "Unable to replicate stream(tap_mysql_test-{}) with binlog because it is a view.".format(
             self.catalog.streams[0].stream)
 
-        try:
+        with self.assertRaises(Exception) as context:
             tap_mysql.do_sync(self.conn, {}, self.catalog, state)
-        except Exception as e:
-            failed = True
-            exception_message = str(e)
-            LOGGER.error(exception_message)
 
-        self.assertTrue(failed)
-        self.assertEqual(expected_exception_message, exception_message)
+            self.assertEqual(expected_exception_message, str(context.exception))
 
     def test_fail_if_log_file_does_not_exist(self):
         log_file = 'chicken'
@@ -729,18 +722,15 @@ class TestBinlogReplication(unittest.TestCase):
             }
         }
 
-        failed = False
-        exception_message = None
         expected_exception_message = "Unable to replicate stream({}) with binlog because log file {} does not exist.".format(
             stream,
             log_file
         )
 
-        try:
+        with self.assertRaises(Exception) as context:
             tap_mysql.do_sync(self.conn, {}, self.catalog, state)
-        except Exception as e:
-            exception_message = str(e)
-            LOGGER.error(exception_message)
+
+            self.assertEqual(expected_exception_message, str(context.exception))
 
     def test_binlog_stream(self):
         global SINGER_MESSAGES
@@ -873,6 +863,38 @@ class TestEscaping(unittest.TestCase):
         self.assertEqual(record_message.record, {'b c': 1})
 
 
+class TestJsonTables(unittest.TestCase):
+
+    def setUp(self):
+        self.conn = test_utils.get_test_connection()
+
+        with connect_with_backoff(self.conn) as open_conn:
+            with open_conn.cursor() as cursor:
+                cursor.execute('CREATE TABLE json_table (val json)')
+                cursor.execute('INSERT INTO json_table (val) VALUES ( \'{"a": 10, "b": "c"}\')')
+
+        self.catalog = test_utils.discover_catalog(self.conn, {})
+        for stream in self.catalog.streams:
+            stream.key_properties = []
+
+            stream.metadata = [
+                {'breadcrumb': (), 'metadata': {'selected': True, 'database-name': 'tap_mysql_test'}},
+                {'breadcrumb': ('properties', 'val'), 'metadata': {'selected': True}}
+            ]
+
+            stream.stream = stream.table
+            test_utils.set_replication_method_and_key(stream, 'FULL_TABLE', None)
+
+    def runTest(self):
+        global SINGER_MESSAGES
+        SINGER_MESSAGES.clear()
+        tap_mysql.do_sync(self.conn, {}, self.catalog, {})
+
+        record_message = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))[0]
+        self.assertTrue(isinstance(record_message, singer.RecordMessage))
+        self.assertEqual(record_message.record, {'val': '{"a": 10, "b": "c"}'})
+
+
 class TestSupportedPK(unittest.TestCase):
 
     def setUp(self):
@@ -960,6 +982,78 @@ class TestSupportedPK(unittest.TestCase):
         with connect_with_backoff(self.conn) as open_conn:
             with open_conn.cursor() as cursor:
                 cursor.execute('DROP TABLE good_pk_tab;')
+
+
+class MySQLConnectionMock(MySQLConnection):
+    """
+    Mocked MySQLConnection class
+    """
+    def __init__(self, config):
+        super().__init__(config)
+
+        self.executed_queries = []
+
+    def run_sql(self, sql):
+        self.executed_queries.append(sql)
+
+
+class TestSessionSqls(unittest.TestCase):
+
+    def setUp(self) -> None:
+        self.executed_queries = []
+
+    def run_sql_mock(self, connection, sql):
+        if sql.startswith('INVALID-SQL'):
+            raise pymysql.err.InternalError
+
+        self.executed_queries.append(sql)
+
+    def test_open_connections_with_default_session_sqls(self):
+        """Default session parameters should be applied if no custom session SQLs"""
+        with patch('tap_mysql.connection.MySQLConnection.connect'):
+            with patch('tap_mysql.connection.run_sql') as run_sql_mock:
+                run_sql_mock.side_effect = self.run_sql_mock
+                conn = MySQLConnectionMock(config=test_utils.get_db_config())
+                connect_with_backoff(conn)
+
+        # Test if session variables applied on connection
+        self.assertEqual(self.executed_queries, tap_mysql.connection.DEFAULT_SESSION_SQLS)
+
+    def test_open_connections_with_session_sqls(self):
+        """Custom session parameters should be applied if defined"""
+        session_sqls = [
+            'SET SESSION max_statement_time=0',
+            'SET SESSION wait_timeout=28800'
+        ]
+
+        with patch('tap_mysql.connection.MySQLConnection.connect'):
+            with patch('tap_mysql.connection.run_sql') as run_sql_mock:
+                run_sql_mock.side_effect = self.run_sql_mock
+                conn = MySQLConnectionMock(config={**test_utils.get_db_config(),
+                                                   **{'session_sqls': session_sqls}})
+                connect_with_backoff(conn)
+
+        # Test if session variables applied on connection
+        self.assertEqual(self.executed_queries, session_sqls)
+
+    def test_open_connections_with_invalid_session_sqls(self):
+        """Invalid SQLs in session_sqls should be ignored"""
+        session_sqls = [
+            'SET SESSION max_statement_time=0',
+            'INVALID-SQL-SHOULD-BE-SILENTLY-IGNORED',
+            'SET SESSION wait_timeout=28800'
+        ]
+
+        with patch('tap_mysql.connection.MySQLConnection.connect'):
+            with patch('tap_mysql.connection.run_sql') as run_sql_mock:
+                run_sql_mock.side_effect = self.run_sql_mock
+                conn = MySQLConnectionMock(config={**test_utils.get_db_config(),
+                                                   **{'session_sqls': session_sqls}})
+                connect_with_backoff(conn)
+
+        # Test if session variables applied on connection
+        self.assertEqual(self.executed_queries, ['SET SESSION max_statement_time=0',
+                                                 'SET SESSION wait_timeout=28800'])
 
 
 if __name__ == "__main__":

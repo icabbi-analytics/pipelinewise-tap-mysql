@@ -3,12 +3,13 @@
 import codecs
 import copy
 import datetime
-
+import json
 import pymysql.connections
 import pymysql.err
 import pytz
 import singer
 import tzlocal
+
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.constants import FIELD_TYPE
 from pymysqlreplication.event import RotateEvent
@@ -17,13 +18,12 @@ from pymysqlreplication.row_event import (
     UpdateRowsEvent,
     WriteRowsEvent,
 )
-from singer import utils
-from singer.schema import Schema
+from singer import utils, Schema
 
 import tap_mysql.sync_strategies.common as common
 from tap_mysql.connection import connect_with_backoff, make_connection_wrapper
 
-LOGGER = singer.get_logger()
+LOGGER = singer.get_logger('tap_mysql')
 
 SDC_DELETED_AT = "_sdc_deleted_at"
 
@@ -115,6 +115,14 @@ def fetch_server_id(mysql_conn):
             return server_id
 
 
+def json_bytes_to_string(data):
+    if isinstance(data, bytes):  return data.decode()
+    if isinstance(data, dict):   return dict(map(json_bytes_to_string, data.items()))
+    if isinstance(data, tuple):  return tuple(map(json_bytes_to_string, data))
+    if isinstance(data, list):   return list(map(json_bytes_to_string, data))
+    return data
+
+
 def row_to_singer_record(catalog_entry, version, db_column_map, row, time_extracted):
     row_to_persist = {}
 
@@ -141,6 +149,9 @@ def row_to_singer_record(catalog_entry, version, db_column_map, row, time_extrac
         elif isinstance(val, datetime.timedelta):
             timedelta_from_epoch = datetime.datetime.utcfromtimestamp(0) + val
             row_to_persist[column_name] = timedelta_from_epoch.isoformat() + '+00:00'
+
+        elif db_column_type == FIELD_TYPE.JSON:
+            row_to_persist[column_name] = json.dumps(json_bytes_to_string(val))
 
         elif isinstance(val, bytes):
             # encode bytes as hex bytes then to utf8 string
@@ -425,7 +436,7 @@ def sync_binlog_stream(mysql_conn, config, binlog_streams, state):
         LOGGER.info("No server_id provided, will use global server_id=%s", server_id)
 
     connection_wrapper = make_connection_wrapper(config)
-
+    reader = None
     try:
         reader = BinLogStreamReader(
             connection_settings={},
