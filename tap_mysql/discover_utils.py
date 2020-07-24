@@ -177,7 +177,7 @@ def schema_for_column(column):
     result = Schema(inclusion=inclusion)
 
     if data_type == 'bit' or column_type.startswith('tinyint(1)'):
-        result.type = ['null', 'boolean']
+        result.type = ['null', 'number']
 
     elif data_type in BYTES_FOR_INTEGER_TYPE:
         result.type = ['null', 'integer']
