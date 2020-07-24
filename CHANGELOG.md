@@ -1,3 +1,21 @@
+1.3.3 (2020-07-23)
+------------------
+During LOG_BASED runtime, detect new columns, incl renamed ones, by comparing the columns in the binlog event to the stream schema, and if there are any additional columns, run discovery and send a new SCHEMA message to target. This helps avoid data loss.
+
+
+1.3.2 (2020-06-15)
+-------------------
+
+-  Revert `pymysql` back to `0.7.11`.
+   `pymysql >= 0.8.1` introducing some not expected and not backward compatible changes how it's dealing with
+   invalid datetime columns.
+
+1.3.1 (2020-06-15)
+-------------------
+
+-  Fix dependency issue by removing `attrs` from `setup.py`
+-  Bump `pymysql` to `0.9.3`
+
 1.3.0 (2020-05-18)
 -------------------
 
