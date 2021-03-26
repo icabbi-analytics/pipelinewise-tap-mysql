@@ -22,7 +22,7 @@ setup(name='pipelinewise-tap-mysql',
           'pipelinewise-singer-python==1.*',
           'PyMySQL==0.7.11',
           'mysql-replication==0.21',
-          'pyyaml==5.3',
+          'pyyaml==5.4',
       ],
       extras_require={
           'test': [
