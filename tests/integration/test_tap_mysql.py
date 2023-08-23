@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import patch
 
@@ -7,10 +8,10 @@ import singer.metadata
 
 import tap_mysql
 import tap_mysql.discover_utils
-from tap_mysql.connection import connect_with_backoff, MySQLConnection
+from tap_mysql.connection import connect_with_backoff, MySQLConnection, fetch_server_id, MYSQL_ENGINE, MARIADB_ENGINE
 
 try:
-    import tests.utils as test_utils
+    import tests.integration.utils as test_utils
 except ImportError:
     import utils as test_utils
 
@@ -31,6 +32,9 @@ singer.write_message = accumulate_singer_messages
 
 class TestTypeMapping(unittest.TestCase):
 
+    def setUp(self) -> None:
+        self.maxDiff = None
+
     @classmethod
     def setUpClass(cls):
         conn = test_utils.get_test_connection()
@@ -47,6 +51,7 @@ class TestTypeMapping(unittest.TestCase):
                 c_tinyint_1 TINYINT(1),
                 c_tinyint_1_unsigned TINYINT(1) UNSIGNED,
                 c_smallint SMALLINT,
+                c_tinytext TINYTEXT,
                 c_mediumint MEDIUMINT,
                 c_int INT,
                 c_bigint BIGINT,
@@ -56,7 +61,16 @@ class TestTypeMapping(unittest.TestCase):
                 c_bit BIT(4),
                 c_date DATE,
                 c_time TIME,
-                c_year YEAR
+                c_year YEAR,
+                c_geometry GEOMETRY,
+                c_point POINT,
+                c_linestring LINESTRING,
+                c_polygon POLYGON,
+                c_multipoint MULTIPOINT,
+                c_multilinestring MULTILINESTRING,
+                c_multipolygon MULTIPOLYGON,
+                c_geometrycollection GEOMETRYCOLLECTION,
+                c_blob BLOB
                 )''')
 
         catalog = test_utils.discover_catalog(conn, {})
@@ -73,7 +87,8 @@ class TestTypeMapping(unittest.TestCase):
                                 multipleOf=1))
         self.assertEqual(self.get_metadata_for_column('c_decimal'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'decimal(10,0)'})
+                          'sql-datatype': 'decimal(10,0)',
+                          'datatype': 'decimal'})
 
     def test_decimal_unsigned(self):
         self.assertEqual(self.schema.properties['c_decimal_2_unsigned'],
@@ -82,7 +97,8 @@ class TestTypeMapping(unittest.TestCase):
                                 multipleOf=0.01))
         self.assertEqual(self.get_metadata_for_column('c_decimal_2_unsigned'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'decimal(5,2) unsigned'})
+                          'sql-datatype': 'decimal(5,2) unsigned',
+                          'datatype': 'decimal'})
 
     def test_decimal_with_defined_scale_and_precision(self):
         self.assertEqual(self.schema.properties['c_decimal_2'],
@@ -91,7 +107,8 @@ class TestTypeMapping(unittest.TestCase):
                                 multipleOf=0.01))
         self.assertEqual(self.get_metadata_for_column('c_decimal_2'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'decimal(11,2)'})
+                          'sql-datatype': 'decimal(11,2)',
+                          'datatype': 'decimal'})
 
     def test_tinyint(self):
         self.assertEqual(self.schema.properties['c_tinyint'],
@@ -101,7 +118,8 @@ class TestTypeMapping(unittest.TestCase):
                                 maximum=127))
         self.assertEqual(self.get_metadata_for_column('c_tinyint'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'tinyint(4)'})
+                          'sql-datatype': 'tinyint(4)',
+                          'datatype': 'tinyint'})
 
     def test_tinyint_1(self):
         self.assertEqual(self.schema.properties['c_tinyint_1'],
@@ -109,7 +127,8 @@ class TestTypeMapping(unittest.TestCase):
                                 inclusion='available'))
         self.assertEqual(self.get_metadata_for_column('c_tinyint_1'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'tinyint(1)'})
+                          'sql-datatype': 'tinyint(1)',
+                          'datatype': 'tinyint'})
 
     def test_tinyint_1_unsigned(self):
         self.assertEqual(self.schema.properties['c_tinyint_1_unsigned'],
@@ -117,7 +136,8 @@ class TestTypeMapping(unittest.TestCase):
                                 inclusion='available'))
         self.assertEqual(self.get_metadata_for_column('c_tinyint_1_unsigned'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'tinyint(1) unsigned'})
+                          'sql-datatype': 'tinyint(1) unsigned',
+                          'datatype': 'tinyint'})
 
     def test_smallint(self):
         self.assertEqual(self.schema.properties['c_smallint'],
@@ -127,7 +147,8 @@ class TestTypeMapping(unittest.TestCase):
                                 maximum=32767))
         self.assertEqual(self.get_metadata_for_column('c_smallint'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'smallint(6)'})
+                          'sql-datatype': 'smallint(6)',
+                          'datatype': 'smallint'})
 
     def test_mediumint(self):
         self.assertEqual(self.schema.properties['c_mediumint'],
@@ -137,7 +158,8 @@ class TestTypeMapping(unittest.TestCase):
                                 maximum=8388607))
         self.assertEqual(self.get_metadata_for_column('c_mediumint'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'mediumint(9)'})
+                          'sql-datatype': 'mediumint(9)',
+                          'datatype': 'mediumint'})
 
     def test_int(self):
         self.assertEqual(self.schema.properties['c_int'],
@@ -147,7 +169,8 @@ class TestTypeMapping(unittest.TestCase):
                                 maximum=2147483647))
         self.assertEqual(self.get_metadata_for_column('c_int'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'int(11)'})
+                          'sql-datatype': 'int(11)',
+                          'datatype': 'int'})
 
     def test_bigint(self):
         self.assertEqual(self.schema.properties['c_bigint'],
@@ -157,7 +180,8 @@ class TestTypeMapping(unittest.TestCase):
                                 maximum=9223372036854775807))
         self.assertEqual(self.get_metadata_for_column('c_bigint'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'bigint(20)'})
+                          'sql-datatype': 'bigint(20)',
+                          'datatype': 'bigint'})
 
     def test_bigint_unsigned(self):
         self.assertEqual(self.schema.properties['c_bigint_unsigned'],
@@ -168,7 +192,8 @@ class TestTypeMapping(unittest.TestCase):
 
         self.assertEqual(self.get_metadata_for_column('c_bigint_unsigned'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'bigint(20) unsigned'})
+                          'sql-datatype': 'bigint(20) unsigned',
+                          'datatype': 'bigint'})
 
     def test_float(self):
         self.assertEqual(self.schema.properties['c_float'],
@@ -176,7 +201,8 @@ class TestTypeMapping(unittest.TestCase):
                                 inclusion='available'))
         self.assertEqual(self.get_metadata_for_column('c_float'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'float'})
+                          'sql-datatype': 'float',
+                          'datatype': 'float'})
 
     def test_double(self):
         self.assertEqual(self.schema.properties['c_double'],
@@ -184,7 +210,8 @@ class TestTypeMapping(unittest.TestCase):
                                 inclusion='available'))
         self.assertEqual(self.get_metadata_for_column('c_double'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'double'})
+                          'sql-datatype': 'double',
+                          'datatype': 'double'})
 
     def test_bit(self):
         self.assertEqual(self.schema.properties['c_bit'],
@@ -192,7 +219,8 @@ class TestTypeMapping(unittest.TestCase):
                                 inclusion='available'))
         self.assertEqual(self.get_metadata_for_column('c_bit'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'bit(4)'})
+                          'sql-datatype': 'bit(4)',
+                          'datatype': 'bit'})
 
     def test_date(self):
         self.assertEqual(self.schema.properties['c_date'],
@@ -201,28 +229,111 @@ class TestTypeMapping(unittest.TestCase):
                                 inclusion='available'))
         self.assertEqual(self.get_metadata_for_column('c_date'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'date'})
+                          'sql-datatype': 'date',
+                          'datatype': 'date'})
 
     def test_time(self):
         self.assertEqual(self.schema.properties['c_time'],
                          Schema(['null', 'string'],
-                                format='date-time',
+                                format='time',
                                 inclusion='available'))
         self.assertEqual(self.get_metadata_for_column('c_time'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'time'})
+                          'sql-datatype': 'time',
+                          'datatype': 'time'})
 
     def test_year(self):
         self.assertEqual(self.schema.properties['c_year'].inclusion,
                          'unsupported')
         self.assertEqual(self.get_metadata_for_column('c_year'),
                          {'selected-by-default': False,
-                          'sql-datatype': 'year(4)'})
+                          'sql-datatype': 'year(4)',
+                          'datatype': 'year'})
 
     def test_pk(self):
         self.assertEqual(
             self.schema.properties['c_pk'].inclusion,
             'automatic')
+
+    def test_geometry(self):
+        self.assertEqual(self.schema.properties['c_geometry'],
+                         Schema(['null', 'object'],
+                                format='spatial',
+                                inclusion='available'))
+        self.assertEqual(self.get_metadata_for_column('c_geometry'),
+                         {'selected-by-default': True,
+                          'sql-datatype': 'geometry',
+                          'datatype': 'geometry'})
+
+    def test_point(self):
+        self.assertEqual(self.schema.properties['c_point'],
+                         Schema(['null', 'object'],
+                                format='spatial',
+                                inclusion='available'))
+        self.assertEqual(self.get_metadata_for_column('c_point'),
+                         {'selected-by-default': True,
+                          'sql-datatype': 'point',
+                          'datatype': 'point'})
+
+    def test_linestring(self):
+        self.assertEqual(self.schema.properties['c_linestring'],
+                         Schema(['null', 'object'],
+                                format='spatial',
+                                inclusion='available'))
+        self.assertEqual(self.get_metadata_for_column('c_linestring'),
+                         {'selected-by-default': True,
+                          'sql-datatype': 'linestring',
+                          'datatype': 'linestring'})
+
+    def test_polygon(self):
+        self.assertEqual(self.schema.properties['c_polygon'],
+                         Schema(['null', 'object'],
+                                format='spatial',
+                                inclusion='available'))
+        self.assertEqual(self.get_metadata_for_column('c_polygon'),
+                         {'selected-by-default': True,
+                          'sql-datatype': 'polygon',
+                          'datatype': 'polygon'})
+
+    def test_multipoint(self):
+        self.assertEqual(self.schema.properties['c_multipoint'],
+                         Schema(['null', 'object'],
+                                format='spatial',
+                                inclusion='available'))
+        self.assertEqual(self.get_metadata_for_column('c_multipoint'),
+                         {'selected-by-default': True,
+                          'sql-datatype': 'multipoint',
+                          'datatype': 'multipoint'})
+
+    def test_multilinestring(self):
+        self.assertEqual(self.schema.properties['c_multilinestring'],
+                         Schema(['null', 'object'],
+                                format='spatial',
+                                inclusion='available'))
+        self.assertEqual(self.get_metadata_for_column('c_multilinestring'),
+                         {'selected-by-default': True,
+                          'sql-datatype': 'multilinestring',
+                          'datatype': 'multilinestring'})
+
+    def test_multipolygon(self):
+        self.assertEqual(self.schema.properties['c_multipolygon'],
+                         Schema(['null', 'object'],
+                                format='spatial',
+                                inclusion='available'))
+        self.assertEqual(self.get_metadata_for_column('c_multipolygon'),
+                         {'selected-by-default': True,
+                          'sql-datatype': 'multipolygon',
+                          'datatype': 'multipolygon'})
+
+    def test_geometrycollection(self):
+        self.assertEqual(self.schema.properties['c_geometrycollection'],
+                         Schema(['null', 'object'],
+                                format='spatial',
+                                inclusion='available'))
+        self.assertEqual(self.get_metadata_for_column('c_geometrycollection'),
+                         {'selected-by-default': True,
+                          'sql-datatype': 'geometrycollection',
+                          'datatype': 'geometrycollection'})
 
 
 class TestSelectsAppropriateColumns(unittest.TestCase):
@@ -347,10 +458,10 @@ def message_types_and_versions(messages):
     versions = []
     for message in messages:
         t = type(message)
-        if t in set([singer.RecordMessage, singer.ActivateVersionMessage]):
+        if t in {singer.RecordMessage, singer.ActivateVersionMessage}:
             message_types.append(t.__name__)
             versions.append(message.version)
-    return (message_types, versions)
+    return message_types, versions
 
 
 class TestStreamVersionFullTable(unittest.TestCase):
@@ -463,10 +574,13 @@ class TestIncrementalReplication(unittest.TestCase):
 
         with connect_with_backoff(self.conn) as open_conn:
             with open_conn.cursor() as cursor:
-                cursor.execute('CREATE TABLE incremental (val int, updated datetime)')
-                cursor.execute('INSERT INTO incremental (val, updated) VALUES (1, \'2017-06-01\')')
-                cursor.execute('INSERT INTO incremental (val, updated) VALUES (2, \'2017-06-20\')')
-                cursor.execute('INSERT INTO incremental (val, updated) VALUES (3, \'2017-09-22\')')
+                cursor.execute('CREATE TABLE incremental (val int, updated datetime, ctime time)')
+                cursor.execute('INSERT INTO incremental (val, updated, ctime) VALUES (1, \'2017-06-01\', '
+                               'current_time())')
+                cursor.execute('INSERT INTO incremental (val, updated, ctime) VALUES (2, \'2017-06-20\', '
+                               'current_time())')
+                cursor.execute('INSERT INTO incremental (val, updated, ctime) VALUES (3, \'2017-09-22\', '
+                               'current_time())')
                 cursor.execute('CREATE TABLE integer_incremental (val int, updated int)')
                 cursor.execute('INSERT INTO integer_incremental (val, updated) VALUES (1, 1)')
                 cursor.execute('INSERT INTO integer_incremental (val, updated) VALUES (2, 2)')
@@ -589,16 +703,6 @@ class TestIncrementalReplication(unittest.TestCase):
 
 class TestBinlogReplication(unittest.TestCase):
 
-    # def tearDown(self) -> None:
-    #     with connect_with_backoff(self.conn) as open_conn:
-    #         with open_conn.cursor() as cursor:
-    #             cursor.execute('DROP TABLE binlog_1;')
-    #             cursor.execute('DROP TABLE binlog_2;')
-    #
-    #         open_conn.commit()
-    #
-    #     self.conn = None
-
     def setUp(self):
         self.maxDiff = None
         self.state = {}
@@ -608,14 +712,27 @@ class TestBinlogReplication(unittest.TestCase):
 
         with connect_with_backoff(self.conn) as open_conn:
             with open_conn.cursor() as cursor:
-                cursor.execute('CREATE TABLE binlog_1 (id int, updated datetime)')
-                cursor.execute('CREATE TABLE binlog_2 (id int, updated datetime)')
-                cursor.execute('INSERT INTO binlog_1 (id, updated) VALUES (1, \'2017-06-01\')')
-                cursor.execute('INSERT INTO binlog_1 (id, updated) VALUES (2, \'2017-06-20\')')
-                cursor.execute('INSERT INTO binlog_1 (id, updated) VALUES (3, \'2017-09-22\')')
-                cursor.execute('INSERT INTO binlog_2 (id, updated) VALUES (1, \'2017-10-22\')')
-                cursor.execute('INSERT INTO binlog_2 (id, updated) VALUES (2, \'2017-11-10\')')
-                cursor.execute('INSERT INTO binlog_2 (id, updated) VALUES (3, \'2017-12-10\')')
+                cursor.execute('CREATE TABLE binlog_1 (id int, updated datetime, '
+                               'created_date Date)')
+                cursor.execute("""
+                    CREATE TABLE binlog_2 (id int, 
+                    updated datetime, 
+                    is_good bool default False, 
+                    ctime time, 
+                    cjson json)
+                """)
+                cursor.execute(
+                    'INSERT INTO binlog_1 (id, updated, created_date) VALUES (1, \'2017-06-01\', current_date())')
+                cursor.execute(
+                    'INSERT INTO binlog_1 (id, updated, created_date) VALUES (2, \'2017-06-20\', current_date())')
+                cursor.execute(
+                    'INSERT INTO binlog_1 (id, updated, created_date) VALUES (3, \'2017-09-22\', current_date())')
+                cursor.execute('INSERT INTO binlog_2 (id, updated, ctime, cjson) VALUES (1, \'2017-10-22\', '
+                               'current_time(), \'[{"key1": "A", "key2": ["B", 2], "key3": {}}]\')')
+                cursor.execute('INSERT INTO binlog_2 (id, updated, ctime, cjson) VALUES (2, \'2017-11-10\', '
+                               'current_time(), \'[{"key1": "A", "key2": ["B", 2], "key3": {}}]\')')
+                cursor.execute('INSERT INTO binlog_2 (id, updated, ctime, cjson) VALUES (3, \'2017-12-10\', '
+                               'current_time(), \'[{"key1": "A", "key2": ["B", 2], "key3": {}}]\')')
                 cursor.execute('UPDATE binlog_1 set updated=\'2018-06-18\' WHERE id = 3')
                 cursor.execute('UPDATE binlog_2 set updated=\'2018-06-18\' WHERE id = 2')
                 cursor.execute('DELETE FROM binlog_1 WHERE id = 2')
@@ -633,7 +750,7 @@ class TestBinlogReplication(unittest.TestCase):
                  'metadata': {
                      'selected': True,
                      'database-name': 'tap_mysql_test',
-                     'table-key-propertes': ['id']
+                     'table-key-properties': ['id']
                  }},
                 {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
                 {'breadcrumb': ('properties', 'updated'), 'metadata': {'selected': True}}
@@ -656,12 +773,15 @@ class TestBinlogReplication(unittest.TestCase):
                                                'version',
                                                singer.utils.now())
 
-    def test_initial_full_table(self):
-        state = {}
-        binlog.fetch_current_log_file_and_pos(self.conn)
-
+    def tearDown(self) -> None:
         global SINGER_MESSAGES
         SINGER_MESSAGES.clear()
+
+    def test_initial_full_table(self):
+        state = {}
+
+        global SINGER_MESSAGES
+
         tap_mysql.do_sync(self.conn, {}, self.catalog, state)
 
         message_types = [type(m) for m in SINGER_MESSAGES]
@@ -691,11 +811,13 @@ class TestBinlogReplication(unittest.TestCase):
             lambda m: isinstance(m, singer.ActivateVersionMessage) and m.stream == 'tap_mysql_test-binlog_2',
             SINGER_MESSAGES))[0]
 
-        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_1', 'log_file'))
-        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_1', 'log_pos'))
+        self.assertIsNotNone(singer.get_bookmark(state, 'tap_mysql_test-binlog_1', 'log_file'))
+        self.assertIsNotNone(singer.get_bookmark(state, 'tap_mysql_test-binlog_1', 'log_pos'))
+        self.assertIsNone(singer.get_bookmark(state, 'tap_mysql_test-binlog_1', 'gtid'))
 
-        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'log_file'))
-        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'log_pos'))
+        self.assertIsNotNone(singer.get_bookmark(state, 'tap_mysql_test-binlog_2', 'log_file'))
+        self.assertIsNotNone(singer.get_bookmark(state, 'tap_mysql_test-binlog_2', 'log_pos'))
+        self.assertIsNone(singer.get_bookmark(state, 'tap_mysql_test-binlog_2', 'gtid'))
 
         self.assertEqual(singer.get_bookmark(state, 'tap_mysql_test-binlog_1', 'version'),
                          activate_version_message_1.version)
@@ -710,15 +832,13 @@ class TestBinlogReplication(unittest.TestCase):
 
         state = {}
 
-        failed = False
-        exception_message = None
-        expected_exception_message = "Unable to replicate stream(tap_mysql_test-{}) with binlog because it is a view.".format(
-            self.catalog.streams[0].stream)
+        expected_exception_message = "Unable to replicate stream(tap_mysql_test-{}) with binlog because it is a view.". \
+            format(self.catalog.streams[0].stream)
 
         with self.assertRaises(Exception) as context:
             tap_mysql.do_sync(self.conn, {}, self.catalog, state)
 
-            self.assertEqual(expected_exception_message, str(context.exception))
+        self.assertEqual(expected_exception_message, str(context.exception))
 
     def test_fail_if_log_file_does_not_exist(self):
         log_file = 'chicken'
@@ -733,24 +853,28 @@ class TestBinlogReplication(unittest.TestCase):
             }
         }
 
-        expected_exception_message = "Unable to replicate stream({}) with binlog because log file {} does not exist.".format(
-            stream,
-            log_file
-        )
+        expected_exception_message = "Unable to replicate binlog stream because the following binary log(s) no " \
+                                     "longer exist: {}".format(log_file)
 
         with self.assertRaises(Exception) as context:
             tap_mysql.do_sync(self.conn, {}, self.catalog, state)
 
-            self.assertEqual(expected_exception_message, str(context.exception))
+        self.assertEqual(expected_exception_message, str(context.exception))
 
     def test_binlog_stream(self):
         global SINGER_MESSAGES
-        SINGER_MESSAGES.clear()
 
         config = test_utils.get_db_config()
         config['server_id'] = "100"
 
         tap_mysql.do_sync(self.conn, config, self.catalog, self.state)
+
+        schema_messages = list(filter(lambda m: isinstance(m, singer.SchemaMessage), SINGER_MESSAGES))
+
+        for schema_msg in schema_messages:
+            for prop, val in schema_msg.schema['properties'].items():
+                self.assertIn('type', val, f'property "{prop}" has no "type" in stream "{schema_msg.stream}"')
+
         record_messages = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))
 
         message_types = [type(m) for m in SINGER_MESSAGES]
@@ -794,7 +918,6 @@ class TestBinlogReplication(unittest.TestCase):
 
     def test_binlog_stream_with_alteration(self):
         global SINGER_MESSAGES
-        SINGER_MESSAGES.clear()
 
         config = test_utils.get_db_config()
         config['server_id'] = "100"
@@ -803,8 +926,10 @@ class TestBinlogReplication(unittest.TestCase):
 
         with connect_with_backoff(self.conn) as open_conn:
             with open_conn.cursor() as cursor:
+                cursor.execute('ALTER TABLE binlog_1 add column data blob;')
                 cursor.execute('ALTER TABLE binlog_1 add column is_cancelled boolean;')
-                cursor.execute('INSERT INTO binlog_1 (id, updated, is_cancelled) VALUES (2, \'2017-06-20\', true)')
+                cursor.execute(
+                    'INSERT INTO binlog_1 (id, updated, is_cancelled, data) VALUES (2, \'2017-06-20\', true, \'blob content\')')
                 cursor.execute('INSERT INTO binlog_1 (id, updated, is_cancelled) VALUES (3, \'2017-09-21\', false)')
                 cursor.execute('INSERT INTO binlog_2 (id, updated) VALUES (3, \'2017-12-10\')')
                 cursor.execute('ALTER TABLE binlog_1 change column updated date_updated datetime;')
@@ -813,6 +938,12 @@ class TestBinlogReplication(unittest.TestCase):
             open_conn.commit()
 
         tap_mysql.do_sync(self.conn, config, self.catalog, self.state)
+
+        schema_messages = list(filter(lambda m: isinstance(m, singer.SchemaMessage), SINGER_MESSAGES))
+
+        for schema_msg in schema_messages:
+            for prop, val in schema_msg.schema['properties'].items():
+                self.assertIn('type', val, f'property "{prop}" has no "type" in stream "{schema_msg.stream}"')
 
         record_messages = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))
 
@@ -831,8 +962,8 @@ class TestBinlogReplication(unittest.TestCase):
                           singer.RecordMessage,
                           singer.RecordMessage,
                           singer.RecordMessage,
-                          singer.StateMessage, # end of 1st sync
-                          singer.StateMessage, # start of 2nd sync
+                          singer.StateMessage,  # end of 1st sync
+                          singer.StateMessage,  # start of 2nd sync
                           singer.SchemaMessage,
                           singer.SchemaMessage,
                           singer.SchemaMessage,
@@ -876,6 +1007,159 @@ class TestBinlogReplication(unittest.TestCase):
 
         self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'log_file'))
         self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'log_pos'))
+
+    def test_binlog_stream_with_gtid(self):
+        global SINGER_MESSAGES
+
+        engine = os.getenv('TAP_MYSQL_ENGINE', MYSQL_ENGINE)
+        gtid = binlog.fetch_current_gtid_pos(self.conn, os.environ['TAP_MYSQL_ENGINE'])
+
+        config = test_utils.get_db_config()
+        config['use_gtid'] = True
+        config['engine'] = engine
+
+        self.state = singer.write_bookmark(self.state,
+                                           'tap_mysql_test-binlog_1',
+                                           'gtid',
+                                           gtid)
+
+        self.state = singer.write_bookmark(self.state,
+                                           'tap_mysql_test-binlog_2',
+                                           'gtid',
+                                           gtid)
+
+        with connect_with_backoff(self.conn) as open_conn:
+            with open_conn.cursor() as cursor:
+                cursor.execute('INSERT INTO binlog_1 (id, updated) VALUES (4, \'2022-06-20\')')
+                cursor.execute('INSERT INTO binlog_1 (id, updated) VALUES (5, \'2022-09-21\')')
+                cursor.execute('INSERT INTO binlog_2 (id, updated) VALUES (4, \'2017-12-10\')')
+                cursor.execute('delete from binlog_1 WHERE id = 3')
+
+            open_conn.commit()
+
+        tap_mysql.do_sync(self.conn, config, self.catalog, self.state)
+
+        record_messages = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))
+
+        message_types = [type(m) for m in SINGER_MESSAGES]
+        self.assertEqual(message_types,
+                         [singer.StateMessage,
+                          singer.SchemaMessage,
+                          singer.SchemaMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.StateMessage,
+                          ])
+
+        self.assertEqual([('tap_mysql_test-binlog_1', 4, False),
+                          ('tap_mysql_test-binlog_1', 5, False),
+                          ('tap_mysql_test-binlog_2', 4, False),
+                          ('tap_mysql_test-binlog_1', 3, True)],
+                         [(m.stream,
+                           m.record['id'],
+                           m.record.get(binlog.SDC_DELETED_AT) is not None)
+                          for m in record_messages])
+
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_1', 'log_file'))
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_1', 'log_pos'))
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_1', 'gtid'))
+
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'log_file'))
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'log_pos'))
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'gtid'))
+
+    def test_binlog_stream_switching_from_binlog_to_gtid_with_mysql_fails(self):
+        global SINGER_MESSAGES
+
+        engine = os.getenv('TAP_MYSQL_ENGINE', MYSQL_ENGINE)
+
+        if engine != MYSQL_ENGINE:
+            self.skipTest('This test is only meant for Mysql flavor')
+
+        log_file, log_pos = binlog.fetch_current_log_file_and_pos(self.conn)
+
+        self.state = singer.write_bookmark(self.state,
+                                           'tap_mysql_test-binlog_1',
+                                           'log_file',
+                                           log_file)
+
+        self.state = singer.write_bookmark(self.state,
+                                           'tap_mysql_test-binlog_2',
+                                           'log_pos',
+                                           log_pos)
+
+        config = test_utils.get_db_config()
+
+        config['use_gtid'] = True
+        config['engine'] = engine
+
+        with self.assertRaises(Exception) as context:
+            tap_mysql.do_sync(self.conn, config, self.catalog, self.state)
+
+        self.assertEqual("Couldn't find any gtid in state bookmarks to resume logical replication",
+                         str(context.exception))
+
+    def test_binlog_stream_switching_from_binlog_to_gtid_with_mariadb_success(self):
+        global SINGER_MESSAGES
+
+        engine = os.getenv('TAP_MYSQL_ENGINE', MYSQL_ENGINE)
+
+        if engine != MARIADB_ENGINE:
+            self.skipTest('This test is only meant for Mariadb flavor')
+
+        config = test_utils.get_db_config()
+
+        config['use_gtid'] = True
+        config['engine'] = engine
+
+        tap_mysql.do_sync(self.conn, config, self.catalog, self.state)
+
+        record_messages = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))
+
+        message_types = [type(m) for m in SINGER_MESSAGES]
+        self.assertEqual(message_types,
+                         [singer.StateMessage,
+                          singer.SchemaMessage,
+                          singer.SchemaMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.RecordMessage,
+                          singer.StateMessage,
+                          ])
+
+        self.assertEqual([
+            ('tap_mysql_test-binlog_1', 1, False),
+            ('tap_mysql_test-binlog_1', 2, False),
+            ('tap_mysql_test-binlog_1', 3, False),
+            ('tap_mysql_test-binlog_2', 1, False),
+            ('tap_mysql_test-binlog_2', 2, False),
+            ('tap_mysql_test-binlog_2', 3, False),
+            ('tap_mysql_test-binlog_1', 3, False),
+            ('tap_mysql_test-binlog_2', 2, False),
+            ('tap_mysql_test-binlog_1', 2, True),
+            ('tap_mysql_test-binlog_2', 1, True),
+        ],
+            [(m.stream,
+              m.record['id'],
+              m.record.get(binlog.SDC_DELETED_AT) is not None)
+             for m in record_messages])
+
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_1', 'log_file'))
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_1', 'log_pos'))
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_1', 'gtid'))
+
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'log_file'))
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'log_pos'))
+        self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'gtid'))
 
 
 class TestViews(unittest.TestCase):
@@ -1018,14 +1302,13 @@ class TestSupportedPK(unittest.TestCase):
         self.assertEqual(primary_keys, {'good_pk_tab': ['good_pk']})
 
     def test_sync_messages_are_correct(self):
-
         self.catalog.streams[0] = test_utils.set_replication_method_and_key(self.catalog.streams[0], 'LOG_BASED', None)
         self.catalog.streams[0] = test_utils.set_selected(self.catalog.streams[0], True)
 
         global SINGER_MESSAGES
         SINGER_MESSAGES.clear()
 
-        #inital sync
+        # inital sync
         tap_mysql.do_sync(self.conn, {}, self.catalog, {})
 
         # get schema message to test that it has all the table's columns
@@ -1084,6 +1367,7 @@ class MySQLConnectionMock(MySQLConnection):
     """
     Mocked MySQLConnection class
     """
+
     def __init__(self, config):
         super().__init__(config)
 
@@ -1152,7 +1436,40 @@ class TestSessionSqls(unittest.TestCase):
                                                  'SET SESSION wait_timeout=28800'])
 
 
-if __name__ == "__main__":
-    test1 = TestBinlogReplication()
-    test1.setUp()
-    test1.test_binlog_stream()
+class TestBitBooleanMapping(unittest.TestCase):
+
+    def setUp(self):
+        self.conn = test_utils.get_test_connection()
+
+        with connect_with_backoff(self.conn) as open_conn:
+            with open_conn.cursor() as cursor:
+                cursor.execute("CREATE TABLE bit_booleans_table(`id` int, `c_bit` BIT(4))")
+                cursor.execute("INSERT INTO bit_booleans_table(`id`,`c_bit`) VALUES "
+                               "(1, b'0000'),"
+                               "(2, NULL),"
+                               "(3, b'0010')")
+
+        self.catalog = test_utils.discover_catalog(self.conn, {})
+
+    def test_sync_messages_are_correct(self):
+        self.catalog.streams[0] = test_utils.set_replication_method_and_key(self.catalog.streams[0], 'FULL_TABLE', None)
+        self.catalog.streams[0] = test_utils.set_selected(self.catalog.streams[0], True)
+
+        global SINGER_MESSAGES
+        SINGER_MESSAGES.clear()
+
+        tap_mysql.do_sync(self.conn, {}, self.catalog, {})
+
+        record_messages = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))
+
+        self.assertEqual(len(record_messages), 3)
+        self.assertListEqual([
+            {'id': 1, 'c_bit': False},
+            {'id': 2, 'c_bit': None},
+            {'id': 3, 'c_bit': True},
+        ], [rec.record for rec in record_messages])
+
+    def tearDown(self) -> None:
+        with connect_with_backoff(self.conn) as open_conn:
+            with open_conn.cursor() as cursor:
+                cursor.execute('DROP TABLE bit_booleans_table;')

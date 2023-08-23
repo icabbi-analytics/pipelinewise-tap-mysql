@@ -64,7 +64,7 @@ def generate_select_sql(catalog_entry, columns):
     escaped_table = escape(catalog_entry.table)
     escaped_columns = []
 
-    for idx, col_name in enumerate(columns):
+    for col_name in columns:
         # wrap the column name in "`"
         escaped_col = escape(col_name)
 
@@ -73,8 +73,12 @@ def generate_select_sql(catalog_entry, columns):
 
         # if the column format is binary, fetch the values after removing any trailing
         # null bytes 0x00 and hexifying the column.
-        if 'binary' == property_format:
-            escaped_columns.append(f'hex(trim(trailing CHAR(0x00) from {escaped_col})) as {escaped_col}')
+        if property_format == 'binary':
+            escaped_columns.append(
+                f'hex(trim(trailing CHAR(0x00) from {escaped_col})) as {escaped_col}')
+        elif property_format == 'spatial':
+            escaped_columns.append(
+                f'ST_AsGeoJSON({escaped_col}) as {escaped_col}')
         else:
             escaped_columns.append(escaped_col)
 
@@ -89,6 +93,8 @@ def row_to_singer_record(catalog_entry, version, row, columns, time_extracted):
     row_to_persist = ()
     for idx, elem in enumerate(row):
         property_type = catalog_entry.schema.properties[columns[idx]].type
+        property_format = catalog_entry.schema.properties[columns[idx]].format
+
         if isinstance(elem, datetime.datetime):
             row_to_persist += (elem.isoformat() + '+00:00',)
 
@@ -96,14 +102,17 @@ def row_to_singer_record(catalog_entry, version, row, columns, time_extracted):
             row_to_persist += (elem.isoformat() + 'T00:00:00+00:00',)
 
         elif isinstance(elem, datetime.timedelta):
-            epoch = datetime.datetime.utcfromtimestamp(0)
-            timedelta_from_epoch = epoch + elem
-            row_to_persist += (timedelta_from_epoch.isoformat() + '+00:00',)
+            if property_format == 'time':
+                row_to_persist += (str(elem),) # this should convert time column into 'HH:MM:SS' formatted string
+            else:
+                epoch = datetime.datetime.utcfromtimestamp(0)
+                timedelta_from_epoch = epoch + elem
+                row_to_persist += (timedelta_from_epoch.isoformat() + '+00:00',)
 
         elif 'boolean' in property_type or property_type == 'boolean':
             if elem is None:
                 boolean_representation = None
-            elif elem == 0:
+            elif elem in (0, b'\x00'):
                 boolean_representation = False
             else:
                 boolean_representation = True

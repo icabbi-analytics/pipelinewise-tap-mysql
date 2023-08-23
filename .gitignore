@@ -103,4 +103,12 @@ ENV/
 # Emacs
 .tramp_history
 
+# Singer
 config.json
+properties.json
+catalog.json
+state.json
+
+# IDE
+.vscode
+.idea

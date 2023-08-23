@@ -61,31 +61,29 @@ mysql> select * from example_db.animals;
 
 ### Create the configuration file
 
-Create a config file containing the database connection credentials, e.g.:
+Create a config file containing the database connection credentials, see [sample](config.json.sample).
 
-```json
-{
-  "host": "localhost",
-  "port": "3306",
-  "user": "root",
-  "password": "password"
-}
-```
+List of config parameters:
 
-These are the same basic configuration properties used by the MySQL command-line
-client (`mysql`).
+| Parameter         | type                          | required | default                                                                                                                                                           | description                                                                                                               |
+|-------------------|-------------------------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------|
+| host              | string                        | yes      | -                                                                                                                                                                 | mysql/mariadb host                                                                                                        |
+| port              | int                           | yes      | -                                                                                                                                                                 | mysql/mariadb port                                                                                                        |
+| user              | string                        | yes      | -                                                                                                                                                                 | db username                                                                                                               |
+| password          | string                        | yes      | -                                                                                                                                                                 | db password                                                                                                               |
+| cursorclass       | string                        | No       | `pymysql.cursors.SSCursor`                                                                                                                                        | set cursorclass used by PyMYSQL                                                                                           |
+| database          | string                        | No       | -                                                                                                                                                                 | Database to use, None to not use a particular one. Used by PyMYSQL                                                        |
+| server_id         | int                           | False    | Randomly generated int                                                                                                                                            | Used as the slave id when this tap is connecting to the server                                                            |
+| filter_dbs        | string                        | False    | -                                                                                                                                                                 | Comma separated list of schemas to extract tables only from particular schemas and to improve data extraction performance |
+| use_gtid          | bool                          | False    | False                                                    <br/>                                                                                                         | Flag to enable log based replication using GTID               |
+| engine            | string ('mysql' or 'mariadb') | False    | 'mysql'                                                                                                                                                           | Indicate which flavor the server is, used for LOG_BASED with GTID                                                         |
+| ssl               | string ("true")               | No       | False                                                                                                                                                             | Enable SSL connection                                                                                                     |
+| ssl_ca            | string                        | No       | -                                                                                                                                                                 | for self-signed SSL                                                                                                       |
+| ssl_cert          | string                        | No       | -                                                                                                                                                                 | for self-signed SSL                                                                                                       |
+| ssl_key           | string                        | No       | -                                                                                                                                                                 | for self-signed SSL                                                                                                       |
+| internal_hostname | string | No       | -                                                                                                                                                                 | Override match hostname for google cloud                                                                                  |
+| session_sqls      | List of strings               | No       | ```['SET @@session.time_zone="+0:00"', 'SET @@session.wait_timeout=28800', 'SET @@session.net_read_timeout=3600', 'SET @@session.innodb_lock_wait_timeout=3600']``` | Set session variables dynamically.                                                                                        |
 
-### Optional config parameters
-
-`filter_db`: Comma separated list of schemas to extract tables only from particular schemas and to improve data extraction performance
-
-`session_sqls`: List of SQL commands to run when a connection made. This allows to set session variables dynamically, like timeouts. If not set then the following commands will be executed:
-```
-SET @@session.time_zone="+0:00"
-SET @@session.wait_timeout=28800
-SET @@session.net_read_timeout=3600
-SET @@session.innodb_lock_wait_timeout=3600
-```
 
 ### Discovery mode
 
@@ -289,14 +287,50 @@ resultant stream of JSON data can be consumed by a Singer target.
 
 ## Replication methods and state file
 
-In the above example, we invoked `tap-mysql` without providing a _state_ file
-and without specifying a replication method. The two ways to replicate a given
-table are `FULL_TABLE` and `INCREMENTAL`.
+In the above example, we invoked `tap-mysql` without providing a _state_ file and without specifying a replication 
+method. The ways to replicate a given table are `FULL_TABLE`, `LOG_BASED` and `INCREMENTAL`.
+
+### LOG_BASED
+
+LOG_BASED replication makes use of the server's binary logs (binlogs), this method can work with primary 
+servers, the tap acts as a replica and requests the primary to stream log events,the tap then consumes events 
+pertaining to row changes (inserts, updates, deletes), binlog file rotate and gtid events.
+
+Log_based method always requires an initial sync to get a snapshot of the table and current binlog coordinates/gtid 
+position.
+
+The tap support two ways of consuming log events: using binlog coordinates or GTID, the default behavior is using 
+binlog coordinates, when turning the `use_gtid` flag, you have to specify the engine flavor (mariadb/mysql) due to 
+how different are the GTID implementations in these two engines.
+
+When enabling the `use_gtid` flag and the engine is MariaDB, the tap will dynamically infer the GTID pos from 
+existing binlog coordinate in the state, if the engine is mysql, it will fail.
+
+#### State when using binlog coordinates
+```json
+{
+  "bookmarks": {
+    "example_db-table1": {"log_file": "mysql-binlog.0003", "log_pos": 3244},
+    "example_db-table2": {"log_file": "mysql-binlog.0001", "log_pos": 42},
+    "example_db-table3": {"log_file": "mysql-binlog.0003", "log_pos": 100}
+  }
+}
+```
+
+#### State when using GTID
+```json
+{
+  "bookmarks": {
+    "example_db-table1": {"log_file": "mysql-binlog.0003", "log_pos": 3244, "gtid": "0:364864374:599"},
+    "example_db-table2": {"log_file": "mysql-binlog.0001", "log_pos": 42, "gtid": "0:364864374:375"},
+    "example_db-table3": {"log_file": "mysql-binlog.0003", "log_pos": 100, "gtid": "0:364864374:399"}
+  }
+}
+```
 
 ### Full Table
 
-Full-table replication extracts all data from the source table each time the tap
-is invoked.
+Full-table replication extracts all data from the source table each time the tap is invoked.
 
 ### Incremental
 
@@ -419,6 +453,51 @@ This invocation extracts any data since (and including) the
 {"type": "STATE", "value": {"bookmarks": {"example_db-animals": {"replication_key": "id", "version": 1509135204169, "replication_key_value": 6}}, "currently_syncing": "example_db-animals"}}
 
 {"type": "STATE", "value": {"bookmarks": {"example_db-animals": {"replication_key": "id", "version": 1509135204169, "replication_key_value": 6}}, "currently_syncing": null}}
+```
+
+## To run tests:
+
+1. You'll need to have a running MySQL or MariaDB server to run the tests. Run the following SQL commands as a privileged user to create the required objects:
+```
+CREATE USER <mysql-user> IDENTIFIED BY '<mysql-password>';
+CREATE DATABASE tap_mysql_test;
+GRANT ALL PRIVILEGES ON tap_mysql_test.* TO <mysql-user>;
+```
+
+**Note**: The user and password can be anything but the database name needs to be `tap_mysql_test`.
+
+2. Define the environment variables that are required to run the tests:
+```
+  export TAP_MYSQL_HOST=<mysql-host>
+  export TAP_MYSQL_PORT=<mysql-port>
+  export TAP_MYSQL_USER=<mysql-user>
+  export TAP_MYSQL_PASSWORD=<mysql-password>
+  export TAP_MYSQL_ENGINE=<engine>
+```
+
+3. Install python test dependencies in a virtual env
+
+```bash
+python3 -m venv venv
+. venv/bin/activate
+pip install --upgrade pip
+pip install .[test]
+```
+
+4. To run tests:
+```bash
+nosetests -c .noserc tests
+```
+
+### To run pylint:
+
+1. Install python dependencies and run python linter
+```
+  python3 -m venv venv
+  . venv/bin/activate
+  pip install --upgrade pip
+  pip install .[test]
+  pylint --rcfile .pylintrc tap_mysql
 ```
 
 ---
